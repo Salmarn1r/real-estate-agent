@@ -1,8 +1,10 @@
 """
-Real Estate Lead Qualifier – Streamlit version
+Real Estate Lead Qualifier – Streamlit + Airtable (logs every message)
 """
 
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
@@ -14,8 +16,40 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from tavily import TavilyClient
+from pyairtable import Api
 
 load_dotenv()
+
+# ─────────────────────────────────────────────
+# Airtable setup
+# ─────────────────────────────────────────────
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
+
+airtable = None
+if AIRTABLE_API_KEY and AIRTABLE_BASE_ID:
+    try:
+        api = Api(AIRTABLE_API_KEY)
+        airtable = api.table(AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME)
+    except Exception as e:
+        st.warning(f"Airtable connection failed: {e}")
+
+def log_message_to_airtable(session_id: str, role: str, content: str, lead_name: str = "", phone: str = ""):
+    """Log a single message to Airtable."""
+    if not airtable:
+        return
+    try:
+        airtable.create({
+            "Session ID": session_id,
+            "Role": role,
+            "Content": content,
+            "Lead Name": lead_name or "",
+            "Phone": phone or "",
+            "Timestamp": datetime.now(timezone.utc).isoformat()
+        })
+    except Exception as e:
+        print(f"Failed to log to Airtable: {e}")
 
 # ─────────────────────────────────────────────
 # Tools
@@ -54,7 +88,7 @@ def notify_agent(message: str) -> str:
 tools = [research_market, log_to_crm, notify_agent]
 
 # ─────────────────────────────────────────────
-# State & Graph
+# LangGraph setup
 # ─────────────────────────────────────────────
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -113,7 +147,10 @@ st.set_page_config(page_title="Real Estate Lead Qualifier", page_icon="🏠")
 st.title("🏠 Real Estate Lead Qualifier")
 st.caption("AI assistant that helps qualify real estate leads")
 
-# Initialize chat history
+# Session ID (stays the same for the whole browser session)
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())[:8]
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -125,19 +162,28 @@ for msg in st.session_state.messages:
 
 # Chat input
 if prompt := st.chat_input("Type the lead's message here..."):
-    # Add user message
+    # --- Log & show user message ---
     st.session_state.messages.append(HumanMessage(content=prompt))
+    log_message_to_airtable(
+        session_id=st.session_state.session_id,
+        role="user",
+        content=prompt
+    )
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Run the agent
+    # --- Run agent ---
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             result = graph.invoke({"messages": st.session_state.messages})
-            # Get the latest AI response
             ai_message = result["messages"][-1]
             response_text = ai_message.content
             st.markdown(response_text)
 
-    # Save AI response to history
+    # --- Log & save assistant message ---
     st.session_state.messages.append(ai_message)
+    log_message_to_airtable(
+        session_id=st.session_state.session_id,
+        role="assistant",
+        content=response_text
+    )
