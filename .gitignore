@@ -1,0 +1,6 @@
+/.env
+/.venv
+/.vscode
+/phase1_basic_agent.py
+/phase2_lead_qualifier.py
+/phase2_multiturn.py
