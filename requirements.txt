@@ -5,3 +5,4 @@ langchain-core
 langgraph
 tavily-python
 python-dotenv
+pyairtable
